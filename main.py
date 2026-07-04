@@ -139,3 +139,4 @@ def main():
 if __name__ == "__main__":
     main()
 
+# .\.venv\Scripts\python "main,py" "Reborn Rich" 1
