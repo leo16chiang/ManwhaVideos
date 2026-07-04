@@ -1,0 +1,141 @@
+import argparse
+import asyncio
+import os
+import re
+import sys
+from pathlib import Path
+from urllib.parse import quote
+
+from ComicPanelSplitter import ComicPanelSplitter
+from DemonicScansDownloader import DemonicScansDownloader
+from ImageOCR import ImageOCR
+from script_video_generator import ScriptVideoGenerator
+
+
+def build_chapter_url(series_name: str) -> str:
+    series_slug = re.sub(r"[^a-z0-9]+", "-", series_name.strip().lower()).strip("-")
+    return f"https://demonicscans.org/title/{series_slug}/chapter/"
+
+
+def resolve_chapter_dir(download_root: str, series_name: str, chapter: str) -> Path:
+    return Path(download_root) / series_name / f"chapter_{chapter}"
+
+
+def build_chapter_layout(download_root: str, series_name: str, chapter: str) -> dict:
+    chapter_root = resolve_chapter_dir(download_root, series_name, chapter)
+    return {
+        "chapter_root": chapter_root,
+        "raw_images_dir": chapter_root / "raw_images",
+        "split_panels_dir": chapter_root / "split_panels",
+        "text_dir": chapter_root / "text",
+        "mp4_dir": chapter_root / "mp4",
+    }
+
+
+def _normalize_chapter(chapter: str) -> str:
+    value = chapter.strip()
+    if value.lower().startswith("chapter_"):
+        value = value.split("_", 1)[1]
+    return value
+
+
+def run_pipeline(series_name: str, chapter: str, download_root: str = "downloads", voice: str = "en-US-AriaNeural"):
+    chapter_number = _normalize_chapter(chapter)
+    chapter_url = build_chapter_url(series_name)
+
+    chapter_layout = build_chapter_layout(download_root, series_name, chapter_number)
+    chapter_dir = chapter_layout["chapter_root"]
+    chapter_dir.mkdir(parents=True, exist_ok=True)
+
+    for folder in (
+        chapter_layout["raw_images_dir"],
+        chapter_layout["split_panels_dir"],
+        chapter_layout["text_dir"],
+        chapter_layout["mp4_dir"],
+    ):
+        folder.mkdir(parents=True, exist_ok=True)
+
+    downloader = DemonicScansDownloader(
+        chapter_url,
+        download_root=download_root,
+        max_concurrent=10,
+        output_dir=str(chapter_layout["raw_images_dir"]),
+    )
+    asyncio.run(downloader.download(int(chapter_number), int(chapter_number)))
+
+    image_paths = sorted(
+        str(path)
+        for path in chapter_layout["raw_images_dir"].iterdir()
+        if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+    )
+
+    if not image_paths:
+        raise FileNotFoundError(f"No downloaded images were found in {chapter_layout['raw_images_dir']}")
+
+    splitter = ComicPanelSplitter()
+    ocr = ImageOCR()
+    generator = ScriptVideoGenerator(voice=voice)
+
+    panel_segments = []
+
+    for image_path in image_paths:
+        page_name = Path(image_path).stem
+        page_panels_dir = chapter_layout["split_panels_dir"] / page_name
+        page_panels_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Splitting panels from {image_path}...")
+        panel_paths = splitter.save_panels(
+            image_path,
+            output_dir=str(page_panels_dir),
+            prefix="panel",
+        )
+
+        for panel_path in panel_paths:
+            text = ocr.extract_text(panel_path).strip()
+            text_content = text or "Panel text unavailable."
+            text_file = chapter_layout["text_dir"] / f"{Path(panel_path).stem}.txt"
+            text_file.write_text(text_content, encoding="utf-8")
+            panel_segments.append(
+                {
+                    "image": panel_path,
+                    "text": text_content,
+                }
+            )
+
+    if not panel_segments:
+        raise RuntimeError("No panels were created for OCR and video generation.")
+
+    output_video = chapter_layout["mp4_dir"] / f"{re.sub(r'[^A-Za-z0-9]+', '_', series_name.strip()).strip('_')}_chapter_{chapter_number}.mp4"
+    generator.build_video(panel_segments, output_path=str(output_video))
+
+    return {
+        "chapter_dir": str(chapter_dir),
+        "video_path": str(output_video),
+        "segment_count": len(panel_segments),
+    }
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run the comic-to-video pipeline")
+    parser.add_argument("series_name", nargs="?", help="Series name to download")
+    parser.add_argument("chapter", nargs="?", help="Chapter number to process")
+    parser.add_argument("--series", dest="series_option", help="Series name to download")
+    parser.add_argument("--chapter", dest="chapter_option", help="Chapter number to process")
+    parser.add_argument("--voice", default="en-US-AriaNeural", help="TTS voice to use")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    series_name = args.series_option or args.series_name
+    chapter = args.chapter_option or args.chapter
+
+    if not series_name or not chapter:
+        raise SystemExit("Usage: python \"main,py\" \"Series Name\" 1")
+
+    result = run_pipeline(series_name, chapter, voice=args.voice)
+    print(f"Pipeline complete. Video saved to {result['video_path']}")
+
+
+if __name__ == "__main__":
+    main()
+

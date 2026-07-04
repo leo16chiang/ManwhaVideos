@@ -31,7 +31,9 @@ Usage:
 import os
 import asyncio
 import edge_tts
-from moviepy import ImageClip, AudioFileClip, concatenate_videoclips
+import numpy as np
+from moviepy import AudioFileClip, ImageClip, concatenate_videoclips
+from moviepy.audio.AudioClip import AudioClip, CompositeAudioClip
 
 
 class ScriptVideoGenerator:
@@ -88,7 +90,10 @@ class ScriptVideoGenerator:
         self._generate_narration(text, audio_path)
 
         audio_clip = AudioFileClip(audio_path)
-        duration = audio_clip.duration
+        duration = max(0.2, audio_clip.duration)
+
+        silence = AudioClip(lambda t: np.zeros((1,)), duration=duration)
+        audio_clip = CompositeAudioClip([audio_clip.with_duration(duration), silence.with_duration(duration)])
 
         img_clip = ImageClip(image_path).with_duration(duration)
 
@@ -128,7 +133,16 @@ class ScriptVideoGenerator:
         final = concatenate_videoclips(clips, method="compose")
 
         print(f"Writing video to {output_path} ...")
-        final.write_videofile(output_path, fps=self.fps, codec="libx264", audio_codec="aac")
+        final.write_videofile(
+            output_path,
+            fps=self.fps,
+            codec="libx264",
+            audio_codec="aac",
+            audio_bitrate="192k",
+            threads=1,
+            logger=None,
+            write_logfile=False,
+        )
 
         if not self.keep_audio_files:
             for p in audio_paths:

@@ -42,16 +42,22 @@ class DemonicScansDownloader:
         max_concurrent: int = 10,
         max_empty_chapters: int = 3,
         timeout: int = 30,
+        output_dir=None,
     ):
         self.base_chapter_url = base_chapter_url
         self.max_concurrent = max_concurrent
         self.max_empty_chapters = max_empty_chapters
+        self.output_dir = output_dir
 
-        comic_name = unquote(unquote(base_chapter_url.split("/")[4]))
-        self.comic_dir = os.path.join(download_root, comic_name)
-        os.makedirs(self.comic_dir, exist_ok=True)
+        if output_dir:
+            self.comic_dir = output_dir
+            os.makedirs(self.comic_dir, exist_ok=True)
+        else:
+            comic_name = unquote(unquote(base_chapter_url.split("/")[4]))
+            self.comic_dir = os.path.join(download_root, comic_name)
+            os.makedirs(self.comic_dir, exist_ok=True)
 
-        self.connector = aiohttp.TCPConnector(limit=max_concurrent)
+        self.connector = None
         self.timeout = aiohttp.ClientTimeout(total=timeout)
 
     async def download(self, chapter_start: int, chapter_end: int):
@@ -84,7 +90,7 @@ class DemonicScansDownloader:
 
                 empty_count = 0
 
-                chapter_dir = os.path.join(
+                chapter_dir = self.output_dir or os.path.join(
                     self.comic_dir,
                     f"chapter_{chapter}",
                 )
