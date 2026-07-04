@@ -1,0 +1,6 @@
+aiohttp
+beautifulsoup4
+pillow
+numpy
+edge-tts
+moviepy
